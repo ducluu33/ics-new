@@ -1,4 +1,3 @@
-import { chromium } from 'playwright';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
@@ -12,7 +11,9 @@ const TIME_TO_SLOT = {
   '14:00': 4, '15:40': 5, '17:20': 6,
 };
 
-function hhmm(h, m) { return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`; }
+function hhmm(h, m) {
+  return String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0');
+}
 
 function parseIcsDate(s) {
   const m = s.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})$/);
@@ -28,12 +29,14 @@ function parseVEvents(ics) {
   const text = icsUnfold(ics);
   const events = [];
   const blocks = text.split(/BEGIN:VEVENT/).slice(1);
+
   for (const b of blocks) {
     const block = b.split('END:VEVENT')[0];
     const get = re => {
       const m = block.match(re);
       return m ? m[1].trim() : '';
     };
+
     events.push({
       uid: get(/\nUID:(.+?)\r?\n/),
       dtstart: get(/\nDTSTART:(.+?)\r?\n/),
@@ -41,16 +44,18 @@ function parseVEvents(ics) {
       summary: get(/\nSUMMARY:(.+?)\r?\n/),
       location: get(/\nLOCATION:(.+?)\r?\n/),
       description: get(/\nDESCRIPTION:(.+?)\r?\n/),
-      rawBlock: block,
     });
   }
+
   return events;
 }
 
 function eventToDetailsKey(ev) {
   const d = parseIcsDate(ev.dtstart);
   if (!d) return null;
-  const date = `${String(d.d).padStart(2, '0')}.${String(d.mo).padStart(2, '0')}.${d.y}`;
+
+  const date = String(d.d).padStart(2, '0') + '.' +
+    String(d.mo).padStart(2, '0') + '.' + d.y;
   const slot = TIME_TO_SLOT[hhmm(d.h, d.mi)];
   return slot ? { date, slot } : null;
 }
@@ -71,42 +76,55 @@ function shortenTeacher(full) {
   const clean = decodeHtml(full);
   const parts = clean.trim().split(/\s+/);
   if (parts.length < 2) return clean;
-  const [last, first, patronymic] = parts;
+
+  const last = parts[0];
+  const first = parts[1];
+  const patronymic = parts[2];
   const f = first ? first[0] + '.' : '';
   const p = patronymic ? patronymic[0] + '.' : '';
-  return `${last} ${f}${p}`.trim();
+  return (last + ' ' + f + p).trim();
 }
 
 function extractTeacher(html) {
-  const m = html.match(/school<\/i>\s*([А-ЯЁ][А-Яа-яЁё\-\s]+?)\s*<\/a>/);
-  if (m) return m[1].trim().replace(/\s+/g, ' ');
-  const m2 = html.match(/<a[^>]*\?q=[^"]+"[^>]*>[^<]*school[^<]*<\/i>\s*([^<]+)<\/a>/);
-  if (m2) return m2[1].trim();
+  const m = html.match(/school<\/i>\s*([^<]+?)\s*<\/a>/i);
+  if (m) return decodeHtml(m[1].trim()).replace(/\s+/g, ' ');
+
+  const m2 = html.match(/<a[^>]*>\s*([^<]*[А-ЯЁ][^<]*)<\/a>/i);
+  if (m2) return decodeHtml(m2[1].trim()).replace(/\s+/g, ' ');
+
   return null;
 }
 
 function extractDepartment(html) {
-  const m = html.match(/\(([^)]*кафедр[^)]*)\)/i) || html.match(/<br\s*\/?>\s*&emsp;&emsp;\s*\(([^)]+)\)/);
-  return m ? m[1].trim().replace(/\s+/g, ' ') : null;
+  const m =
+    html.match(/\(([^)]*кафедр[^)]*)\)/i) ||
+    html.match(/<br\s*\/?>\s*&emsp;&emsp;\s*\(([^)]+)\)/i);
+
+  return m ? decodeHtml(m[1].trim()).replace(/\s+/g, ' ') : null;
 }
 
 function cleanSummaryEscaped(raw, groupPrefix) {
-  const esc = groupPrefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return raw.replace(new RegExp(`^${esc}\\s*-\\s*`), '').trim();
+  const esc = groupPrefix.replace(/[.*+?^()|[\]\\$]/g, '\\$&');
+  return raw.replace(new RegExp('^' + esc + '\\s*-\\s*'), '').trim();
 }
 
 function icsEscape(s) {
-  return s.replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\r?\n/g, '\\n');
+  return s
+    .replace(/\\/g, '\\\\')
+    .replace(/;/g, '\\;')
+    .replace(/,/g, '\\,')
+    .replace(/\r?\n/g, '\\n');
 }
 
 function foldLine(line) {
   if (line.length <= 75) return line;
+
   const out = [];
   let i = 0;
   while (i < line.length) {
     const chunk = i === 0 ? line.slice(0, 75) : ' ' + line.slice(i, i + 74);
     out.push(chunk);
-    i += (i === 0 ? 75 : 74);
+    i += i === 0 ? 75 : 74;
   }
   return out.join('\r\n');
 }
@@ -121,22 +139,26 @@ function rebuildIcs(nativeIcs, enrichment, groupPrefix) {
 
   for (const line of lines) {
     if (line === 'BEGIN:VEVENT') {
-      inEvent = true; cur = {}; buf = [line];
+      inEvent = true;
+      cur = {};
+      buf = [line];
       continue;
     }
+
     if (line === 'END:VEVENT') {
       const key = cur.uid && enrichment.get(cur.uid);
-      const teacher = key?.teacher || null;
-      const dept = key?.department || null;
+      const teacher = key && key.teacher ? key.teacher : null;
+      const dept = key && key.department ? key.department : null;
       const newBuf = [];
+
       for (const L of buf) {
         if (L.startsWith('SUMMARY:')) {
-          // SUMMARY value is plain (no ICS escapes in native export usually)
           const cleanedPlain = cleanSummaryEscaped(L.slice(8), groupPrefix);
-          const summary = teacher ? `${cleanedPlain} · ${shortenTeacher(teacher)}` : cleanedPlain;
+          const summary = teacher
+            ? cleanedPlain + ' · ' + shortenTeacher(teacher)
+            : cleanedPlain;
           newBuf.push(foldLine('SUMMARY:' + icsEscape(summary)));
         } else if (L.startsWith('DESCRIPTION:')) {
-          // DESCRIPTION in native ICS is already escaped — keep as is, append teacher/dept as escaped chunks
           const originalEscaped = cleanSummaryEscaped(L.slice(12), groupPrefix);
           const additions = [];
           if (teacher) additions.push(icsEscape('Преподаватель: ' + decodeHtml(teacher)));
@@ -147,93 +169,206 @@ function rebuildIcs(nativeIcs, enrichment, groupPrefix) {
           newBuf.push(L);
         }
       }
+
       newBuf.push('END:VEVENT');
       out.push(...newBuf);
       inEvent = false;
       continue;
     }
+
     if (inEvent) {
       buf.push(line);
       const kv = line.match(/^([A-Z-]+):(.*)$/);
-      if (kv) {
-        const key = kv[1].toLowerCase();
-        const val = kv[2];
-        if (key === 'uid') cur.uid = val;
-      }
+      if (kv && kv[1].toLowerCase() === 'uid') cur.uid = kv[2];
     } else {
       out.push(line);
     }
   }
+
   return out.join('\r\n');
 }
 
-async function exportNativeIcs(page) {
-  console.log('[export] Opening modal and downloading ICS...');
-  await page.evaluate(() => window.jQuery && window.jQuery('#modal-export-dlg').modal('show'));
-  await page.waitForTimeout(1000);
-  await page.evaluate(() => {
-    const radio = document.querySelector('input.export-range[value="all"]');
-    if (radio) {
-      radio.checked = true;
-      const lbl = radio.closest('label');
-      if (lbl) {
-        document.querySelectorAll('.btn-export-range').forEach(l => l.classList.remove('active'));
-        lbl.classList.add('active');
-      }
-      radio.dispatchEvent(new Event('change', { bubbles: true }));
-      radio.dispatchEvent(new Event('click', { bubbles: true }));
-    }
-  });
-  await page.waitForTimeout(500);
-  const [download] = await Promise.all([
-    page.waitForEvent('download', { timeout: 30000 }),
-    page.click('#calexport'),
-  ]);
-  const tmp = path.join(DEBUG_DIR, 'native.ics');
-  await download.saveAs(tmp);
-  const content = await fs.readFile(tmp, 'utf8');
-  console.log(`[export] got native ICS: ${content.length} bytes`);
-  await page.evaluate(() => window.jQuery && window.jQuery('#modal-export-dlg').modal('hide')).catch(() => {});
-  await page.waitForTimeout(400);
-  return content;
+function currentAcademicWeek(date = new Date()) {
+  const year = date.getUTCMonth() >= 8
+    ? date.getUTCFullYear()
+    : date.getUTCFullYear() - 1;
+
+  const start = Date.UTC(year, 8, 1);
+  const today = Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
+
+  return 1 + Math.floor((today - start) / (7 * 24 * 60 * 60 * 1000));
 }
 
-async function fetchDetails(page, selection, date, slot) {
-  return await page.evaluate(async ({ sel, d, t }) => {
-    const url = `/Schedule/GetDetails?selection=${encodeURIComponent(sel)}&date=${d}&timeSlot=${t}`;
-    const r = await fetch(url, { headers: { 'X-Requested-With': 'XMLHttpRequest', 'Accept': 'text/html, */*; q=0.01' } });
-    return { status: r.status, text: await r.text() };
-  }, { sel: selection, d: date, t: String(slot) });
-}
-
-async function enrichEvents(page, events, groupLower) {
-  const cache = new Map();
-  const keyOf = ev => {
-    const k = eventToDetailsKey(ev);
-    if (!k) return null;
-    const sumKey = ev.summary.split(' - ').slice(-1)[0];
-    return `${sumKey}::${k.slot}::${new Date(`${k.date.split('.').reverse().join('-')}T00:00:00`).getDay()}`;
+async function reaFetch(url, options = {}) {
+  const headers = {
+    'User-Agent':
+      'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/140.0.0.0 Safari/537.36',
+    'Accept': 'text/html, */*; q=0.01',
+    'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
+    'X-Requested-With': 'XMLHttpRequest',
+    'Referer': BASE_URL + '/',
+    ...(options.headers || {}),
   };
 
+  delete headers['X-Requested-With'];
+
+  if (!options.keepXRequestedWith) {
+    headers['X-Requested-With'] = 'XMLHttpRequest';
+  }
+
+  const response = await fetch(url, { ...options, headers });
+  const text = await response.text();
+
+  console.log('[http] ' + response.status + ' ' + response.statusText +
+    ' ' + url + ' (' + text.length + ' bytes)');
+
+  if (!response.ok) {
+    throw new Error(
+      'REA HTTP ' + response.status + ' for ' + url + ': ' + text.slice(0, 1000)
+    );
+  }
+
+  return { response, text };
+}
+
+async function exportNativeIcsDirect(group) {
+  const week = currentAcademicWeek();
+  const encodedGroup = encodeURIComponent(group);
+
+  console.log('[export] Direct REA API mode; skipping #search/#manual-search-btn');
+  console.log('[export] group=' + group + ', academicWeek=' + week);
+
+  try {
+    const root = await fetch(BASE_URL + '/', {
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/140.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
+      },
+    });
+    const rootText = await root.text();
+    await fs.writeFile(path.join(DEBUG_DIR, 'rea-root-status.txt'),
+      'status=' + root.status + '\nbytes=' + rootText.length + '\n', 'utf8');
+    console.log('[http] REA root: ' + root.status + ' (' + rootText.length + ' bytes)');
+  } catch (e) {
+    await fs.writeFile(path.join(DEBUG_DIR, 'rea-root-error.txt'), String(e), 'utf8');
+    throw e;
+  }
+
+  const exportUrl =
+    BASE_URL + '/Schedule/ExportCalendar?key=' + encodedGroup +
+    '&week=' + week + '&mode=all&mask=0';
+
+  const exportResult = await reaFetch(exportUrl, {
+    headers: {
+      'Accept': 'application/json, text/javascript, */*; q=0.01',
+      'Referer': BASE_URL + '/?q=' + encodedGroup,
+    },
+  });
+
+  await fs.writeFile(
+    path.join(DEBUG_DIR, 'export-calendar-response.txt'),
+    exportResult.text,
+    'utf8'
+  );
+
+  let data;
+  try {
+    data = JSON.parse(exportResult.text);
+  } catch {
+    throw new Error(
+      'ExportCalendar returned non-JSON: ' + exportResult.text.slice(0, 2000)
+    );
+  }
+
+  const fileId = data && data.fileId;
+  if (!fileId) {
+    throw new Error(
+      'ExportCalendar did not return fileId: ' + exportResult.text.slice(0, 2000)
+    );
+  }
+
+  console.log('[export] ExportCalendar returned fileId=' + fileId);
+
+  const fileUrl = BASE_URL + '/Schedule/GetFile?id=' + encodeURIComponent(fileId);
+  const fileResult = await reaFetch(fileUrl, {
+    headers: {
+      'Accept': 'text/calendar,text/plain,*/*;q=0.8',
+      'Referer': BASE_URL + '/?q=' + encodedGroup,
+    },
+  });
+
+  await fs.writeFile(
+    path.join(DEBUG_DIR, 'native-direct.ics'),
+    fileResult.text,
+    'utf8'
+  );
+
+  if (!fileResult.text.includes('BEGIN:VCALENDAR')) {
+    throw new Error(
+      'GetFile did not return an ICS calendar: ' + fileResult.text.slice(0, 2000)
+    );
+  }
+
+  console.log('[export] Native ICS downloaded directly: ' + fileResult.text.length + ' bytes');
+  return fileResult.text;
+}
+
+async function fetchDetails(group, date, slot) {
+  const url =
+    BASE_URL + '/Schedule/GetDetails?selection=' +
+    encodeURIComponent(group.toLowerCase()) +
+    '&date=' + date + '&timeSlot=' + slot;
+
+  return reaFetch(url, {
+    headers: {
+      'Accept': 'text/html, */*; q=0.01',
+    },
+  });
+}
+
+async function enrichEvents(events, groupLower) {
   const uniquePairs = new Map();
+
   for (const ev of events) {
     const k = eventToDetailsKey(ev);
-    const cKey = keyOf(ev);
-    if (!k || !cKey) continue;
-    if (!uniquePairs.has(cKey)) uniquePairs.set(cKey, { ...k, summary: ev.summary, examples: [] });
+    if (!k) continue;
+
+    const sumKey = ev.summary.split(' - ').slice(-1)[0];
+    const weekday = new Date(
+      k.date.split('.').reverse().join('-') + 'T00:00:00Z'
+    ).getUTCDay();
+
+    const cKey = sumKey + '::' + k.slot + '::' + weekday;
+
+    if (!uniquePairs.has(cKey)) {
+      uniquePairs.set(cKey, { ...k, examples: [] });
+    }
     uniquePairs.get(cKey).examples.push(ev.uid);
   }
-  console.log(`[enrich] ${events.length} events, ${uniquePairs.size} unique (subject × slot × weekday) combinations`);
+
+  console.log(
+    '[enrich] ' + events.length + ' events, ' + uniquePairs.size +
+    ' unique (subject × slot × weekday) combinations'
+  );
 
   const enrichment = new Map();
-  let done = 0, fail = 0;
-  for (const [cKey, info] of uniquePairs) {
-    const { date, slot } = info;
+  let done = 0;
+  let fail = 0;
+
+  for (const [, info] of uniquePairs) {
     try {
-      const { status, text } = await fetchDetails(page, groupLower, date, slot);
-      if (status !== 200) { fail++; continue; }
-      const teacher = extractTeacher(text);
-      const department = extractDepartment(text);
+      const result = await fetchDetails(groupLower, info.date, info.slot);
+
+      if (result.response.status !== 200) {
+        fail++;
+        continue;
+      }
+
+      const teacher = extractTeacher(result.text);
+      const department = extractDepartment(result.text);
+
       if (teacher) {
         for (const uid of info.examples) {
           enrichment.set(uid, { teacher, department });
@@ -243,126 +378,64 @@ async function enrichEvents(page, events, groupLower) {
         fail++;
       }
     } catch (e) {
-      console.warn(`[enrich] failed ${date}/${slot}: ${e.message}`);
+      console.warn(
+        '[enrich] failed ' + info.date + '/' + info.slot + ': ' + e.message
+      );
       fail++;
     }
   }
-  console.log(`[enrich] teachers found for ${done}/${uniquePairs.size} combos, ${fail} without teacher`);
-  console.log(`[enrich] enriched ${enrichment.size} events`);
+
+  console.log(
+    '[enrich] teachers found for ' + done + '/' + uniquePairs.size +
+    ' combos, ' + fail + ' without teacher'
+  );
+  console.log('[enrich] enriched ' + enrichment.size + ' events');
+
   return enrichment;
 }
 
 export async function exportIcs() {
-  const browser = await chromium.launch({ headless: true });
-  const context = await browser.newContext({
-    locale: 'ru-RU', timezoneId: 'Europe/Moscow',
-    viewport: { width: 1440, height: 900 }, acceptDownloads: true,
-  });
-  const page = await context.newPage();
   await fs.mkdir(DEBUG_DIR, { recursive: true });
   await fs.mkdir(path.dirname(OUTPUT_ICS), { recursive: true });
 
-  console.log(`[scraper] Opening ${BASE_URL}`);
-  // REA is a dynamic application with background requests, so networkidle can
-  // take a long time in CI. DOMContentLoaded is enough to start the search.
-  await page.goto(BASE_URL, {
-    waitUntil: 'domcontentloaded',
-    timeout: 45000,
-  });
-  await page.waitForTimeout(2000);
+  console.log('[scraper] REA direct API mode for group: ' + GROUP);
 
-  console.log(`[scraper] Filling group: ${GROUP}`);
-  const search = page.locator('#search');
+  // Do not use the REA browser search UI here. GitHub Actions can receive
+  // REA's application-level "offline" state even while rasp.rea.ru itself
+  // is reachable. In that state #manual-search-btn is hidden by design.
+  const nativeIcs = await exportNativeIcsDirect(GROUP);
 
-  await search.waitFor({ state: 'visible', timeout: 20000 });
-  await search.click();
-  await search.fill('');
-
-  console.log(`[scraper] Typing group: ${GROUP}`);
-  await search.type(GROUP, { delay: 50 });
-
-  // REA also provides a dedicated manual-search button. This is the
-  // reliable path used by existing REA Selenium parsers: typing alone does
-  // not necessarily trigger the server-side schedule lookup.
-  const manualSearch = page.locator('#manual-search-btn');
-  await manualSearch.waitFor({ state: 'visible', timeout: 10000 });
-
-  console.log('[scraper] Clicking REA manual search button');
-  await manualSearch.click();
-
-  // Give the schedule request time to start and let the page update.
-  await page.waitForTimeout(1500);
-
-  // If the page still shows the offline/search state, press Enter once as a
-  // fallback. Do not use ArrowDown + Enter: in offline mode there is no
-  // autocomplete result to select.
-  const afterManualSearch = await page.locator('body').innerText();
-  if (afterManualSearch.includes('Вы находитесь в режиме оффлайн!')) {
-    console.log('[scraper] REA still reports offline mode; retrying manual search');
-    await manualSearch.click().catch(() => {});
-    await page.waitForTimeout(2000);
-  }
-
-  // Give the schedule AJAX request time to start after the selection.
-  await page.waitForTimeout(1500);
-
-  try {
-    await page.waitForFunction(() => {
-      const body = document.body.innerText || '';
-
-      return (
-        /ПОНЕДЕЛЬНИК|ВТОРНИК|СРЕДА|ЧЕТВЕРГ|ПЯТНИЦА|СУББОТА/i.test(body) ||
-        document.querySelectorAll(
-          '[data-date], .schedule, .schedule-day, .lesson, .pair'
-        ).length > 0 ||
-        body.includes('Подробности')
-      );
-    }, { timeout: 45000 });
-
-    console.log('[scraper] Schedule rendered ✓');
-  } catch (err) {
-    console.error('[scraper] Schedule did not render after group selection.');
-
-    await page.screenshot({
-      path: path.join(DEBUG_DIR, 'search-timeout.png'),
-      fullPage: true,
-    });
-
-    await fs.writeFile(
-      path.join(DEBUG_DIR, 'search-timeout.html'),
-      await page.content(),
-      'utf8'
-    );
-
-    await fs.writeFile(
-      path.join(DEBUG_DIR, 'search-timeout.txt'),
-      (await page.locator('body').innerText()).slice(0, 20000),
-      'utf8'
-    );
-
-    console.error(
-      '[scraper] Final page text:',
-      (await page.locator('body').innerText()).slice(0, 10000)
-    );
-
-    throw err;
-  }
-
-  const nativeIcs = await exportNativeIcs(page);
   const events = parseVEvents(nativeIcs);
-  console.log(`[scraper] Parsed ${events.length} events from native ICS`);
+  console.log('[scraper] Parsed ' + events.length + ' events from native ICS');
 
-  const enrichment = await enrichEvents(page, events, GROUP.toLowerCase());
+  if (events.length === 0) {
+    throw new Error('REA returned an ICS calendar with 0 events');
+  }
 
+  const enrichment = await enrichEvents(events, GROUP.toLowerCase());
   const enriched = rebuildIcs(nativeIcs, enrichment, GROUP);
-  await fs.writeFile(OUTPUT_ICS, enriched, 'utf8');
-  const stat = await fs.stat(OUTPUT_ICS);
-  console.log(`[scraper] ✓ Saved ${OUTPUT_ICS} (${stat.size} bytes)`);
 
-  await browser.close();
-  return { outputPath: OUTPUT_ICS, size: stat.size, events: events.length, enriched: enrichment.size };
+  await fs.writeFile(OUTPUT_ICS, enriched, 'utf8');
+
+  const stat = await fs.stat(OUTPUT_ICS);
+  console.log(
+    '[scraper] ✓ Saved ' + OUTPUT_ICS + ' (' + stat.size +
+    ' bytes), enriched=' + enrichment.size
+  );
+
+  return {
+    outputPath: OUTPUT_ICS,
+    size: stat.size,
+    events: events.length,
+    enriched: enrichment.size,
+  };
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
-  exportIcs().then(r => console.log('DONE:', r)).catch(e => { console.error(e); process.exit(1); });
+if (import.meta.url === 'file://' + process.argv[1]) {
+  exportIcs()
+    .then(r => console.log('DONE:', r))
+    .catch(e => {
+      console.error(e);
+      process.exit(1);
+    });
 }

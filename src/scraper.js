@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 const BASE_URL = 'https://rasp.rea.ru';
-const GROUP = process.env.GROUP || '15.24Д-Э07/24б';
+const GROUP = process.env.GROUP || '15.27д-би01/25б';
 const OUTPUT_ICS = process.env.OUTPUT || 'public/schedule.ics';
 const DEBUG_DIR = 'public/debug';
 

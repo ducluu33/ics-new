@@ -263,20 +263,105 @@ export async function exportIcs() {
   await fs.mkdir(path.dirname(OUTPUT_ICS), { recursive: true });
 
   console.log(`[scraper] Opening ${BASE_URL}`);
-  await page.goto(BASE_URL, { waitUntil: 'networkidle' });
-  await page.waitForTimeout(1000);
+  // REA is a dynamic application with background requests, so networkidle can
+  // take a long time in CI. DOMContentLoaded is enough to start the search.
+  await page.goto(BASE_URL, {
+    waitUntil: 'domcontentloaded',
+    timeout: 45000,
+  });
+  await page.waitForTimeout(2000);
 
   console.log(`[scraper] Filling group: ${GROUP}`);
   const search = page.locator('#search');
-  await search.waitFor({ state: 'visible', timeout: 15000 });
+
+  await search.waitFor({ state: 'visible', timeout: 20000 });
   await search.click();
   await search.fill('');
-  await search.type(GROUP, { delay: 35 });
-  await page.waitForTimeout(1000);
-  await search.press('Enter');
 
-  await page.waitForFunction(() => /ПОНЕДЕЛЬНИК|ВТОРНИК|СРЕДА|ЧЕТВЕРГ|ПЯТНИЦА|СУББОТА/i.test(document.body.innerText), { timeout: 25000 });
-  console.log('[scraper] Schedule rendered ✓');
+  console.log(`[scraper] Typing group: ${GROUP}`);
+  await search.type(GROUP, { delay: 50 });
+
+  // The REA search field uses an autocomplete/selection step. Do not assume
+  // that pressing Enter immediately after typing has selected the group.
+  await page.waitForTimeout(2500);
+
+  const bodyAfterSearch = await page.locator('body').innerText();
+  console.log('[scraper] Page after group search:');
+  console.log(bodyAfterSearch.slice(0, 5000));
+
+  const exactGroup = page.getByText(GROUP, { exact: true });
+  const exactCount = await exactGroup.count();
+  console.log(`[scraper] Exact group candidates: ${exactCount}`);
+
+  let selected = false;
+
+  for (let i = 0; i < exactCount; i++) {
+    const candidate = exactGroup.nth(i);
+    try {
+      if (await candidate.isVisible()) {
+        console.log(`[scraper] Selecting group candidate #${i}`);
+        await candidate.click();
+        selected = true;
+        break;
+      }
+    } catch (err) {
+      console.log(`[scraper] Candidate #${i} could not be clicked: ${err.message}`);
+    }
+  }
+
+  if (!selected) {
+    // Fallback for autocomplete implementations where the result is only
+    // keyboard-selectable.
+    console.log('[scraper] No clickable exact result; using ArrowDown + Enter');
+    await search.press('ArrowDown');
+    await page.waitForTimeout(300);
+    await search.press('Enter');
+  }
+
+  // Give the schedule AJAX request time to start after the selection.
+  await page.waitForTimeout(1500);
+
+  try {
+    await page.waitForFunction(() => {
+      const body = document.body.innerText || '';
+
+      return (
+        /ПОНЕДЕЛЬНИК|ВТОРНИК|СРЕДА|ЧЕТВЕРГ|ПЯТНИЦА|СУББОТА/i.test(body) ||
+        document.querySelectorAll(
+          '[data-date], .schedule, .schedule-day, .lesson, .pair'
+        ).length > 0 ||
+        body.includes('Подробности')
+      );
+    }, { timeout: 45000 });
+
+    console.log('[scraper] Schedule rendered ✓');
+  } catch (err) {
+    console.error('[scraper] Schedule did not render after group selection.');
+
+    await page.screenshot({
+      path: path.join(DEBUG_DIR, 'search-timeout.png'),
+      fullPage: true,
+    });
+
+    await fs.writeFile(
+      path.join(DEBUG_DIR, 'search-timeout.html'),
+      await page.content(),
+      'utf8'
+    );
+
+    await fs.writeFile(
+      path.join(DEBUG_DIR, 'search-timeout.txt'),
+      (await page.locator('body').innerText()).slice(0, 20000),
+      'utf8'
+    );
+
+    console.error(
+      '[scraper] Final page text:',
+      (await page.locator('body').innerText()).slice(0, 10000)
+    );
+
+    throw err;
+  }
 
   const nativeIcs = await exportNativeIcs(page);
   const events = parseVEvents(nativeIcs);

@@ -281,41 +281,26 @@ export async function exportIcs() {
   console.log(`[scraper] Typing group: ${GROUP}`);
   await search.type(GROUP, { delay: 50 });
 
-  // The REA search field uses an autocomplete/selection step. Do not assume
-  // that pressing Enter immediately after typing has selected the group.
-  await page.waitForTimeout(2500);
+  // REA also provides a dedicated manual-search button. This is the
+  // reliable path used by existing REA Selenium parsers: typing alone does
+  // not necessarily trigger the server-side schedule lookup.
+  const manualSearch = page.locator('#manual-search-btn');
+  await manualSearch.waitFor({ state: 'visible', timeout: 10000 });
 
-  const bodyAfterSearch = await page.locator('body').innerText();
-  console.log('[scraper] Page after group search:');
-  console.log(bodyAfterSearch.slice(0, 5000));
+  console.log('[scraper] Clicking REA manual search button');
+  await manualSearch.click();
 
-  const exactGroup = page.getByText(GROUP, { exact: true });
-  const exactCount = await exactGroup.count();
-  console.log(`[scraper] Exact group candidates: ${exactCount}`);
+  // Give the schedule request time to start and let the page update.
+  await page.waitForTimeout(1500);
 
-  let selected = false;
-
-  for (let i = 0; i < exactCount; i++) {
-    const candidate = exactGroup.nth(i);
-    try {
-      if (await candidate.isVisible()) {
-        console.log(`[scraper] Selecting group candidate #${i}`);
-        await candidate.click();
-        selected = true;
-        break;
-      }
-    } catch (err) {
-      console.log(`[scraper] Candidate #${i} could not be clicked: ${err.message}`);
-    }
-  }
-
-  if (!selected) {
-    // Fallback for autocomplete implementations where the result is only
-    // keyboard-selectable.
-    console.log('[scraper] No clickable exact result; using ArrowDown + Enter');
-    await search.press('ArrowDown');
-    await page.waitForTimeout(300);
-    await search.press('Enter');
+  // If the page still shows the offline/search state, press Enter once as a
+  // fallback. Do not use ArrowDown + Enter: in offline mode there is no
+  // autocomplete result to select.
+  const afterManualSearch = await page.locator('body').innerText();
+  if (afterManualSearch.includes('Вы находитесь в режиме оффлайн!')) {
+    console.log('[scraper] REA still reports offline mode; retrying manual search');
+    await manualSearch.click().catch(() => {});
+    await page.waitForTimeout(2000);
   }
 
   // Give the schedule AJAX request time to start after the selection.
